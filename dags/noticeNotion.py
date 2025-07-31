@@ -20,10 +20,10 @@ def notice_add():
     for notice in results:
         props = notice["properties"]
         add_check = props["각 프로젝트 추가 여부"]["checkbox"]
-        project_id = props["프로젝트명"]["title"][0]["href"].replace('https://www.notion.so/', '')
+        project_id = props["프로젝트명"]["title"][0]["href"].replace('https://www.notion.so/', '') if props["프로젝트명"]["title"] and props["프로젝트명"]["title"][0]["href"] else ''
         notice_text = props["공지사항"]["rich_text"][0]["plain_text"].strip()
         
-        if add_check or len(notice_text) == 0:
+        if add_check or len(notice_text) == 0 or project_id == '':
             continue
         
         
