@@ -71,7 +71,9 @@ def create_sheets():
         if tab_title not in existing_tabs or page_id not in notion_projects:
             new_pages.append(page)
             notion_projects.add(page["id"])
-            
+    
+    # 최근 생성된 프로젝트일 수록 시트가 마지막에 생성되게끔 정열
+    new_pages.reverse()
     # === 시트 복사 및 데이터 삽입
     for page in new_pages:
         props = page["properties"]
