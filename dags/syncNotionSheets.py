@@ -20,7 +20,8 @@ GOOGLE_SHEET_ID = Variable.get('GOOGLE_SHEET_ID')
 TEMPLATE_TAB_ID = int(Variable.get('TEMPLATE_TAB_ID'))
 
 TOKEN_PICKLE = '/opt/airflow/temp/token.pickle'
-NOTION_PROJECTS_FILE = '/opt/airflow/temp/notion_projects.json'
+# NOTION_PROJECTS_FILE = '/opt/airflow/temp/notion_projects.json'
+SHEET_TABS_INFO = '/opt/airflow/temp/sheet_tabs_info.json'
 GOOGLE_SHEETS_FILE = '/opt/airflow/temp/google_sheets.json'
 CREDENTIALS_FILE = '/opt/airflow/temp/credentials.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
@@ -46,31 +47,29 @@ def get_sheets_service():
 # === 연결 ===
 notion = NotionClient(auth=NOTION_TOKEN)
 
+# 시트 생성
 def create_sheets():
     # === 기존 기록 로드 ===
-    if os.path.exists(NOTION_PROJECTS_FILE):
-        with open(NOTION_PROJECTS_FILE, "r") as f:
-            notion_projects = set(json.load(f))
+    if os.path.exists(SHEET_TABS_INFO):
+        with open(SHEET_TABS_INFO, "r") as f:
+            tabs_dict = dict(json.load(f))
     else:
-        notion_projects = set()
+        tabs_dict = dict()
     
+    # === 구글 시트 연결
     sheets = get_sheets_service()
+    
     # === 노션 데이터 불러오기
     results = notion.databases.query(database_id=PROJECT_DB_ID)["results"]
-
-    # === 구글 시트 탭 목록 가져오기
-    sheet_metadata = sheets.spreadsheets().get(spreadsheetId=GOOGLE_SHEET_ID).execute()
-    existing_tabs = {s["properties"]["title"] for s in sheet_metadata.get("sheets", [])}
-
+    
+    # 신규 프로젝트
     new_pages = []
+    
+    # 신규 프로젝트 체크
     for page in results:
-        page_id = page["id"]
-        project_name = page["properties"]["프로젝트명"]["title"][0]["plain_text"]
-        tab_title = f"{project_name}_결산"
-
-        if tab_title not in existing_tabs or page_id not in notion_projects:
+        sheet_url = page["properties"]["sheet url"]['url']
+        if sheet_url == None:
             new_pages.append(page)
-            notion_projects.add(page["id"])
     
     # 최근 생성된 프로젝트일 수록 시트가 마지막에 생성되게끔 정열
     new_pages.reverse()
@@ -79,15 +78,19 @@ def create_sheets():
         props = page["properties"]
         project_name = props["프로젝트명"]["title"][0]["plain_text"]
         new_tab_title = f"{project_name}_결산"
-
+        
         # 탭 복사
         copied_tab = sheets.spreadsheets().sheets().copyTo(
             spreadsheetId=GOOGLE_SHEET_ID,
             sheetId=TEMPLATE_TAB_ID,
             body={"destinationSpreadsheetId": GOOGLE_SHEET_ID}
         ).execute()
-
+        
+        # 새로 생긴 결산 탭 gid
         new_tab_id = copied_tab["sheetId"]
+
+        # gid : tab_title 저장
+        tabs_dict[new_tab_id] = new_tab_title
 
         # 탭 이름 변경
         sheets.spreadsheets().batchUpdate(
@@ -116,45 +119,6 @@ def create_sheets():
                 "sheet url": {"url": sheet_url}
             }
         )
-        # 인라인 데이터베이스 생성
-        # response = notion.databases.create(
-        #     parent={"type": "page_id", "page_id": page["id"]},
-        #     title=[{
-        #         "type": "text",
-        #         "text": {
-        #             "content": "PVC 사용량"
-        #         }
-        #     }],
-        #     properties={
-        #         "컬러": {
-        #             "title": {}
-        #         },
-        #         "회사": {
-        #             "rich_text": {}
-        #         },
-        #         "PVC 백 사용량(백 수)": {
-        #             "number": {
-        #                 "format": "number"
-        #             }
-        #         }
-        #     }
-        # )
-        # # 인라인 데이터베이스 ID 저장
-        # notion.pages.update(
-        #     page_id=page["id"],
-        #     properties={
-        #         "PVC DB ID": {
-        #             "rich_text": [
-        #                 {
-        #                     "type": "text",
-        #                     "text": {
-        #                         "content": response["id"].replace('-', '')
-        #                     }
-        #                 }
-        #             ]
-        #         }
-        #     }
-        # )
         notion.blocks.children.append(
             block_id=page["id"],  # 예: 페이지 ID
             children=[
@@ -184,13 +148,21 @@ def create_sheets():
         time.sleep(3)
         
     # 기록 저장
-    with open(NOTION_PROJECTS_FILE, "w") as f:
-        json.dump(list(notion_projects), f, ensure_ascii=False, indent=2)
+    with open(SHEET_TABS_INFO, "w", encoding="utf-8") as f:
+        json.dump(tabs_dict, f, ensure_ascii=False, indent=4)
 
     print("✅ 시트 생성 완료")
-    time.sleep(10)
-    
+    time.sleep(5)
+
+# 시트 업데이트
 def update_sheets():
+    # === 기존 기록 로드 ===
+    if os.path.exists(SHEET_TABS_INFO):
+        with open(SHEET_TABS_INFO, "r") as f:
+            tabs_dict = dict(json.load(f))
+    else:
+        tabs_dict = dict()
+        
     # 시트 연결
     sheets = get_sheets_service()
     
@@ -202,6 +174,31 @@ def update_sheets():
         props = page["properties"]
         project_name = props["프로젝트명"]["title"][0]["plain_text"]
         tab_title = f"{project_name}_결산"
+        gid = props["sheet url"]["url"].split('gid=')[-1]
+        
+        if tabs_dict[gid] != tab_title:
+            # 탭 타이틀 최신화
+            tabs_dict[gid] = tab_title
+            
+            # 시트 탭 이름 변경
+            sheets.spreadsheets().batchUpdate(
+                spreadsheetId=GOOGLE_SHEET_ID,
+                body={
+                    "requests": [
+                        {
+                            "updateSheetProperties": {
+                                "properties": {
+                                    "sheetId": gid,
+                                    "title": tab_title
+                                },
+                                "fields": "title"
+                            }
+                        }
+                    ]
+                }
+            ).execute()
+        
+        
         project_info = {
             "project_name": project_name,
             "project_type": props["프로젝트 형태"]["select"]["name"] if props["프로젝트 형태"]["select"] else '-',
@@ -229,9 +226,10 @@ def update_sheets():
                 ]
             }
         ).execute()
+        
+        
         time.sleep(1)
     print("✅ 시트 업데이트 완료")
-
 
 # === DAG 정의 ===
 default_args = {
