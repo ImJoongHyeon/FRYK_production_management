@@ -22,7 +22,8 @@ TEMPLATE_TAB_ID = int(Variable.get('TEMPLATE_TAB_ID'))
 TOKEN_PICKLE = '/opt/airflow/temp/token.pickle'
 # NOTION_PROJECTS_FILE = '/opt/airflow/temp/notion_projects.json'
 SHEET_TABS_INFO = '/opt/airflow/temp/sheet_tabs_info.json'
-GOOGLE_SHEETS_FILE = '/opt/airflow/temp/google_sheets.json'
+PROJECT_UPDATE_INFO = '/opt/airflow/temp/project_update_info.json'
+# GOOGLE_SHEETS_FILE = '/opt/airflow/temp/google_sheets.json'
 CREDENTIALS_FILE = '/opt/airflow/temp/credentials.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
@@ -44,17 +45,35 @@ def get_sheets_service():
 
     return build('sheets', 'v4', credentials=creds)
 
+def load_file_to_dict(path):
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return dict(json.load(f))
+    return dict()
+
+def save_file_to_dict(path, cache):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=4)
+        
 # === 연결 ===
 notion = NotionClient(auth=NOTION_TOKEN)
 
 # 시트 생성
 def create_sheets():
     # === 기존 기록 로드 ===
-    if os.path.exists(SHEET_TABS_INFO):
-        with open(SHEET_TABS_INFO, "r") as f:
-            tabs_dict = dict(json.load(f))
-    else:
-        tabs_dict = dict()
+    tabs_dict = load_file_to_dict(SHEET_TABS_INFO)
+    
+    # if os.path.exists(SHEET_TABS_INFO):
+    #     with open(SHEET_TABS_INFO, "r") as f:
+    #         tabs_dict = dict(json.load(f))
+    # else:
+    #     tabs_dict = dict()
+
+    # if os.path.exists(PROJECT_UPDATE_INFO):
+    #    with open(PROJECT_UPDATE_INFO, "r") as f:
+    #        update_dict = dict(json.load(f))
+    # else:
+    #    update_dict = dict()
     
     # === 구글 시트 연결
     sheets = get_sheets_service()
@@ -148,8 +167,9 @@ def create_sheets():
         time.sleep(3)
         
     # 기록 저장
-    with open(SHEET_TABS_INFO, "w", encoding="utf-8") as f:
-        json.dump(tabs_dict, f, ensure_ascii=False, indent=4)
+    save_file_to_dict(SHEET_TABS_INFO, tabs_dict)
+    # with open(SHEET_TABS_INFO, "w", encoding="utf-8") as f:
+    #     json.dump(tabs_dict, f, ensure_ascii=False, indent=4)
 
     print("✅ 시트 생성 완료")
     time.sleep(5)
@@ -157,12 +177,11 @@ def create_sheets():
 # 시트 업데이트
 def update_sheets():
     # === 기존 기록 로드 ===
-    if os.path.exists(SHEET_TABS_INFO):
-        with open(SHEET_TABS_INFO, "r") as f:
-            tabs_dict = dict(json.load(f))
-    else:
-        tabs_dict = dict()
-        
+    tabs_dict = load_file_to_dict(SHEET_TABS_INFO)
+    
+    # === 업데이트  ===
+    update_dict = load_file_to_dict(PROJECT_UPDATE_INFO)
+    
     # 시트 연결
     sheets = get_sheets_service()
     
@@ -172,6 +191,18 @@ def update_sheets():
     # === 시트 복사 및 데이터 삽입
     for page in results:
         props = page["properties"]
+        sheet_url = props["sheet url"]['url']
+        last_edited_time = props["최종 편집 일시"]["last_edited_time"]
+        page_id = page["id"]
+        
+        if page_id in update_dict and update_dict[page_id] == last_edited_time:
+            continue
+    
+        # 시트 생성이 되지 않은 프로젝트
+        if sheet_url == None:
+            continue
+        
+        update_dict[page_id] = last_edited_time
         project_name = props["프로젝트명"]["title"][0]["plain_text"]
         tab_title = f"{project_name}_결산"
         gid = props["sheet url"]["url"].split('gid=')[-1]
@@ -226,9 +257,14 @@ def update_sheets():
                 ]
             }
         ).execute()
-        
-        
-        time.sleep(1)
+        time.sleep(3)
+    
+    # 기록 저장
+    save_file_to_dict(SHEET_TABS_INFO, tabs_dict)
+    save_file_to_dict(PROJECT_UPDATE_INFO, update_dict)
+    
+    # with open(SHEET_TABS_INFO, "w", encoding="utf-8") as f:
+    #     json.dump(tabs_dict, f, ensure_ascii=False, indent=4)
     print("✅ 시트 업데이트 완료")
 
 # === DAG 정의 ===
