@@ -63,18 +63,6 @@ def create_sheets():
     # === 기존 기록 로드 ===
     tabs_dict = load_file_to_dict(SHEET_TABS_INFO)
     
-    # if os.path.exists(SHEET_TABS_INFO):
-    #     with open(SHEET_TABS_INFO, "r") as f:
-    #         tabs_dict = dict(json.load(f))
-    # else:
-    #     tabs_dict = dict()
-
-    # if os.path.exists(PROJECT_UPDATE_INFO):
-    #    with open(PROJECT_UPDATE_INFO, "r") as f:
-    #        update_dict = dict(json.load(f))
-    # else:
-    #    update_dict = dict()
-    
     # === 구글 시트 연결
     sheets = get_sheets_service()
     
@@ -168,8 +156,6 @@ def create_sheets():
         
     # 기록 저장
     save_file_to_dict(SHEET_TABS_INFO, tabs_dict)
-    # with open(SHEET_TABS_INFO, "w", encoding="utf-8") as f:
-    #     json.dump(tabs_dict, f, ensure_ascii=False, indent=4)
 
     print("✅ 시트 생성 완료")
     time.sleep(5)
@@ -263,8 +249,6 @@ def update_sheets():
     save_file_to_dict(SHEET_TABS_INFO, tabs_dict)
     save_file_to_dict(PROJECT_UPDATE_INFO, update_dict)
     
-    # with open(SHEET_TABS_INFO, "w", encoding="utf-8") as f:
-    #     json.dump(tabs_dict, f, ensure_ascii=False, indent=4)
     print("✅ 시트 업데이트 완료")
 
 # === DAG 정의 ===
