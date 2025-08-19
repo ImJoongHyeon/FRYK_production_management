@@ -198,3 +198,4 @@ Docker.raw
 credentials.json
 token.pickle
 .DS_Store
+latest
