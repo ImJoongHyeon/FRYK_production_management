@@ -77,6 +77,9 @@ def create_sheets():
         sheet_url = page["properties"]["sheet url"]['url']
         if sheet_url == None:
             new_pages.append(page)
+        elif sheet_url != None and sheet_url.split('gid=')[-1] not in tabs_dict:
+            gid = sheet_url.split('gid=')[-1]
+            tabs_dict[gid] = page["properties"]["프로젝트명"]["title"][0]["plain_text"] + "_결산"
     
     # 최근 생성된 프로젝트일 수록 시트가 마지막에 생성되게끔 정열
     new_pages.reverse()
