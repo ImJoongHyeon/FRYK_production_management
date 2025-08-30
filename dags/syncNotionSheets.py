@@ -119,7 +119,7 @@ def create_sheets():
                 ]
             }
         ).execute()
-        
+        time.sleep(1)
         # 노션에 링크 업데이트
         sheet_url = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/edit?gid={new_tab_id}#gid={new_tab_id}"
         
@@ -129,6 +129,7 @@ def create_sheets():
                 "sheet url": {"url": sheet_url}
             }
         )
+        time.sleep(1)
         notion.blocks.children.append(
             block_id=page["id"],  # 예: 페이지 ID
             children=[
@@ -155,13 +156,13 @@ def create_sheets():
                 }
             ]
         )
-        time.sleep(3)
+        time.sleep(1)
         
     # 기록 저장
     save_file_to_dict(SHEET_TABS_INFO, tabs_dict)
 
     print("✅ 시트 생성 완료")
-    time.sleep(5)
+    time.sleep(3)
 
 # 시트 업데이트
 def update_sheets():
@@ -217,7 +218,7 @@ def update_sheets():
                     ]
                 }
             ).execute()
-        
+            time.sleep(1)
         
         project_info = {
             "project_name": project_name,
@@ -246,7 +247,7 @@ def update_sheets():
                 ]
             }
         ).execute()
-        time.sleep(3)
+        time.sleep(2)
     
     # 기록 저장
     save_file_to_dict(SHEET_TABS_INFO, tabs_dict)
