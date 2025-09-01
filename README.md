@@ -8,6 +8,7 @@ __airflow를 사용하는 이유는 다음과 같습니다.__
 1. 노션에서 관리하는 프로젝트 별로 결산 시트가 생성되어야 함
 2. 노션에 작성한 프로젝트 페이지의 값이 결산 시트에도 똑같이 쓰이는 값들이 있음.
 
+![architecture](https://github.com/ImJoongHyeon/FRYK_production_management/blob/main/architecture.png)
 --------------------------------------------------------------------------------------------------
 
 ## Version
