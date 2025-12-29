@@ -11,11 +11,30 @@ import time
 NOTION_TOKEN = Variable.get('NOTION_TOKEN')
 NOTION_NOTICE_DB_ID = Variable.get('NOTION_NOTICE_DB_ID') # 테이블 블록의 ID
 
+def query_all_pages(notion, data_source_id, **kwargs):
+    all_results = []
+    cursor = None
+
+    while True:
+        payload = dict(kwargs)
+        if cursor:
+            payload["start_cursor"] = cursor
+        payload["page_size"] = 100
+
+        resp = notion.data_sources.query(data_source_id, **payload)
+        all_results.extend(resp.get("results", []))
+
+        cursor = resp.get("next_cursor")
+        if not resp.get("has_more"):
+            break
+
+    return all_results
+
 def notice_add():
     # === 연결 ===
     notion = NotionClient(auth=NOTION_TOKEN)
 
-    results = notion.databases.query(database_id=NOTION_NOTICE_DB_ID)["results"]
+    results = query_all_pages(notion=notion, data_source_id=NOTION_NOTICE_DB_ID)
     
     for notice in results:
         props = notice["properties"]

@@ -199,4 +199,5 @@ credentials.json
 token.pickle
 .DS_Store
 latest
+.temp/
 temp/
