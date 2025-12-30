@@ -11,7 +11,6 @@ from google.auth.transport.requests import Request
 import json, os, pickle, time
 from datetime import datetime, timedelta
 
-# Env / Paths
 NOTION_TOKEN = Variable.get('NOTION_TOKEN')
 PROJECT_DB_ID = Variable.get('PROJECT_DB_ID')
 
@@ -25,7 +24,6 @@ PROJECT_UPDATE_INFO = '/opt/airflow/temp/project_update_info.json'
 CREDENTIALS_FILE = '/opt/airflow/temp/credentials.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
-# Google Sheets Client
 def get_sheets_service():
     creds = None
     if os.path.exists(TOKEN_PICKLE):
@@ -43,7 +41,6 @@ def get_sheets_service():
 
     return build('sheets', 'v4', credentials=creds, cache_discovery=False)
 
-# JSON helpers
 def load_json_dict(path):
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -55,7 +52,6 @@ def save_json(path, obj):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=4)
 
-# Retry helper (429/500/503)
 def execute_with_retry(request, *, retries=7, base_sleep=1.0, max_sleep=40.0, tag=""):
     for attempt in range(1, retries + 1):
         try:
@@ -73,6 +69,7 @@ def execute_with_retry(request, *, retries=7, base_sleep=1.0, max_sleep=40.0, ta
 def query_all_pages(notion, data_source_id, **kwargs):
     all_results = []
     cursor = None
+
     while True:
         payload = dict(kwargs)
         if cursor:
@@ -85,6 +82,7 @@ def query_all_pages(notion, data_source_id, **kwargs):
         cursor = resp.get("next_cursor")
         if not resp.get("has_more"):
             break
+
     return all_results
 
 def safe_title_text(title_prop):
@@ -145,17 +143,27 @@ def extract_template_tabs(template_tabs_info: dict):
         if not name:
             raise ValueError(f"template tab name이 비어있음 (gid={gid})")
         tabs.append((gid, name))
+
     if not tabs:
         raise ValueError("template_tabs_info.json에서 탭 정보를 찾지 못함")
+
     return tabs
 
-
-def ensure_year_sheet(sheets, sheets_info: dict, template_tabs_info: dict, year_key: str):
+def ensure_year_sheet(sheets, sheets_info: dict, template_tabs_info: dict, year_key: str) -> str:
+    """
+    sheets_info 스키마:
+    {
+        "2026_결산": {
+            "sheet_id": "...",
+            "projects": {
+                "프로젝트명": {"notion_page_id": "...", "gid": 123, "tab_title": "프로젝트명_결산"}
+            }
+        }
+    }
+    """
     year_obj = sheets_info.get(year_key)
-    if year_obj and year_obj.get("sheet_id"):
+    if isinstance(year_obj, dict) and year_obj.get("sheet_id"):
         year_obj.setdefault("projects", {})
-        year_obj.setdefault("gid_index", {})
-        year_obj.setdefault("legacy_project_id", year_obj.get("legacy_project_id", {}))
         return year_obj["sheet_id"]
 
     created = execute_with_retry(
@@ -172,6 +180,7 @@ def ensure_year_sheet(sheets, sheets_info: dict, template_tabs_info: dict, year_
     default_sheet_id = int(meta["sheets"][0]["properties"]["sheetId"])
 
     template_tabs = extract_template_tabs(template_tabs_info)
+
     for template_gid, desired_title in template_tabs:
         copied = execute_with_retry(
             sheets.spreadsheets().sheets().copyTo(
@@ -205,51 +214,8 @@ def ensure_year_sheet(sheets, sheets_info: dict, template_tabs_info: dict, year_
         tag=f"delete default sheet {year_key}"
     )
 
-    sheets_info[year_key] = {
-        "sheet_id": new_spreadsheet_id,
-        "projects": {},
-        "gid_index": {},
-        "legacy_project_id": {}
-    }
+    sheets_info[year_key] = {"sheet_id": new_spreadsheet_id, "projects": {}}
     return new_spreadsheet_id
-
-
-def normalize_and_migrate_sheets_info_schema(sheets_info: dict, notion_pages: list):
-    for year_key, year_obj in list((sheets_info or {}).items()):
-        if not isinstance(year_obj, dict):
-            continue
-        year_obj.setdefault("projects", {})
-        year_obj.setdefault("gid_index", {})
-        if "legacy_project_id" not in year_obj:
-            legacy = year_obj.get("project_id") or {}
-            year_obj["legacy_project_id"] = legacy
-
-    for page in notion_pages:
-        props = page.get("properties", {})
-        page_id = page["id"]
-
-        year = get_release_year(props)
-        if not year:
-            continue
-        year_key = f"{year}_결산"
-        if year_key not in sheets_info:
-            continue
-
-        sheet_url = (props.get("sheet url") or {}).get("url")
-        gid = parse_gid_from_sheet_url(sheet_url)
-        if gid is None:
-            continue
-
-        project_name = safe_title_text(props.get("프로젝트명") or {})
-        if not project_name:
-            continue
-        tab_title = f"{project_name}_결산"
-
-        year_obj = sheets_info[year_key]
-        year_obj["projects"][page_id] = {"gid": int(gid), "tab_title": tab_title}
-        year_obj["gid_index"][str(gid)] = page_id
-
-    return sheets_info
 
 def create_project_tab(sheets, dest_spreadsheet_id: str, tab_title: str) -> int:
     copied = execute_with_retry(
@@ -274,12 +240,11 @@ def create_project_tab(sheets, dest_spreadsheet_id: str, tab_title: str) -> int:
         ),
         tag=f"rename new project tab gid={new_gid}"
     )
-
     time.sleep(1.0)
     return new_gid
 
 
-def rename_tab_if_needed(sheets, spreadsheet_id: str, gid: int, desired_title: str):
+def rename_tab(sheets, spreadsheet_id: str, gid: int, desired_title: str):
     execute_with_retry(
         sheets.spreadsheets().batchUpdate(
             spreadsheetId=spreadsheet_id,
@@ -301,15 +266,18 @@ def write_project_values(sheets, spreadsheet_id: str, tab_title: str, props: dic
     project_info = {
         "project_name": project_name,
         "project_type": ((props.get("프로젝트 형태") or {}).get("select") or {}).get("name") or "-",
-        "business_manager": (((props.get("영업 담당자") or {}).get("multi_select") or [{}])[:1][0].get("name")) if (props.get("영업 담당자") or {}).get("multi_select") else "-",
+        "business_manager": (((props.get("영업 담당자") or {}).get("multi_select") or [{}])[:1][0].get("name"))
+                            if (props.get("영업 담당자") or {}).get("multi_select") else "-",
         "release_date": get_release_date_start(props) or "",
-        "catalog_no": (((props.get("Cat No.") or {}).get("rich_text") or [{}])[:1][0].get("plain_text")) if (props.get("Cat No.") or {}).get("rich_text") else "",
+        "catalog_no": (((props.get("Cat No.") or {}).get("rich_text") or [{}])[:1][0].get("plain_text"))
+                      if (props.get("Cat No.") or {}).get("rich_text") else "",
         "unit_quantity": (props.get("unit quantity") or {}).get("number") or 0,
         "extra_quantity": (props.get("extra quantity") or {}).get("number") or 0,
         "vinyl_set": (((props.get("vinyl set") or {}).get("select") or {}).get("name")) or "-",
     }
 
     sheet = a1_sheet(tab_title)
+
     execute_with_retry(
         sheets.spreadsheets().values().batchUpdate(
             spreadsheetId=spreadsheet_id,
@@ -330,6 +298,7 @@ def write_project_values(sheets, spreadsheet_id: str, tab_title: str, props: dic
         tag=f"values.batchUpdate {tab_title}"
     )
 
+# Notion update 응답에서 last_edited_time 최신화
 def refresh_last_edited_time_from_notion_response(updated_page: dict):
     if not updated_page:
         return None
@@ -343,7 +312,10 @@ def refresh_last_edited_time_from_notion_response(updated_page: dict):
         pass
     return updated_page.get("last_edited_time")
 
-# Ensure year sheets
+
+# =========================
+# Ensure year sheets (Notion에 존재하는 납품연도만)
+# =========================
 def ensure_year_sheets_task():
     notion = NotionClient(auth=NOTION_TOKEN)
     sheets = get_sheets_service()
@@ -353,13 +325,10 @@ def ensure_year_sheets_task():
 
     pages = query_all_pages(notion=notion, data_source_id=PROJECT_DB_ID)
 
-    # 일단 legacy schema normalize
-    sheets_info = normalize_and_migrate_sheets_info_schema(sheets_info, pages)
-
-    # 노션에서 등장하는 연도에 대해 시트 ensure
     years = set()
     for page in pages:
-        y = get_release_year(page.get("properties", {}))
+        props = page.get("properties", {})
+        y = get_release_year(props)
         if y:
             years.add(y)
 
@@ -371,17 +340,15 @@ def ensure_year_sheets_task():
     print(f"✅ ensure_year_sheets_task 완료: years={sorted(years)}")
 
 # Sync projects (create/update/skip)
-
 def sync_projects_task():
     notion = NotionClient(auth=NOTION_TOKEN)
     sheets = get_sheets_service()
 
     sheets_info = load_json_dict(SHEETS_INFO)
-    template_tabs_info = load_json_dict(TEMPLATE_TABS_INFO)  # ensure_year_sheet에서 필요
+    template_tabs_info = load_json_dict(TEMPLATE_TABS_INFO)
     update_info = load_json_dict(PROJECT_UPDATE_INFO)
 
     pages = query_all_pages(notion=notion, data_source_id=PROJECT_DB_ID)
-    sheets_info = normalize_and_migrate_sheets_info_schema(sheets_info, pages)
 
     for page in pages:
         props = page.get("properties", {})
@@ -392,7 +359,6 @@ def sync_projects_task():
             continue
         year_key = f"{release_year}_결산"
 
-        # 혹시 sheets_info가 비었거나 누락이면 task1 안 돌렸어도 여기서 ensure
         dest_spreadsheet_id = ensure_year_sheet(sheets, sheets_info, template_tabs_info, year_key)
 
         project_name = safe_title_text(props.get("프로젝트명") or {})
@@ -406,27 +372,27 @@ def sync_projects_task():
         url_gid = parse_gid_from_sheet_url(sheet_url)
         url_sheet_id = parse_spreadsheet_id_from_url(sheet_url)
 
-        year_obj = sheets_info[year_key]
+        year_obj = sheets_info.setdefault(year_key, {"sheet_id": dest_spreadsheet_id, "projects": {}})
+        year_obj["sheet_id"] = dest_spreadsheet_id
         projects = year_obj.setdefault("projects", {})
-        gid_index = year_obj.setdefault("gid_index", {})
-        cached = projects.get(page_id)
+
+        cached = projects.get(project_name)
         cached_gid = cached.get("gid") if cached else None
         cached_title = cached.get("tab_title") if cached else None
+        cached_page_id = cached.get("notion_page_id") if cached else None
 
-        # ✅ 스킵 조건
         same_edit = (update_info.get(page_id) == last_edited_time)
         same_year_sheet = (url_sheet_id == dest_spreadsheet_id) if sheet_url else False
         same_gid = (url_gid is not None and cached_gid is not None and int(url_gid) == int(cached_gid))
         same_title = (cached_title == tab_title)
+        same_bind = (cached_page_id == page_id) if cached_page_id else True
 
-        if same_edit and same_year_sheet and same_gid and same_title:
-            # print(f"[SKIP] year={year_key} page={page_id} gid={cached_gid} title={tab_title}")
+        if same_edit and same_year_sheet and same_gid and same_title and same_bind:
             continue
 
         created = False
 
-        # gid 결정
-        if cached_gid:
+        if cached_gid and cached_page_id == page_id:
             gid = int(cached_gid)
         elif url_gid is not None and url_sheet_id == dest_spreadsheet_id:
             gid = int(url_gid)
@@ -440,33 +406,31 @@ def sync_projects_task():
             )
             time.sleep(0.5)
 
-            # ✅ PATCH: URL 수정으로 바뀐 last_edited_time을 update_info에 반영
             new_last = refresh_last_edited_time_from_notion_response(updated_page)
             if new_last:
                 last_edited_time = new_last
 
             created = True
-            print(f"[CREATE] year={year_key} page={page_id} gid={gid} title={tab_title}")
+            print(f"[CREATE] year={year_key} name={project_name} page={page_id} gid={gid}")
 
-        # 캐시 갱신
-        projects[page_id] = {"gid": int(gid), "tab_title": tab_title}
-        gid_index[str(gid)] = page_id
+        projects[project_name] = {
+            "notion_page_id": page_id,
+            "gid": int(gid),
+            "tab_title": tab_title
+        }
 
-        # rename 필요시만
-        if cached_title is not None and cached_title != tab_title:
-            rename_tab_if_needed(sheets, dest_spreadsheet_id, gid, tab_title)
+        if cached_gid and cached_title and cached_title != tab_title and int(cached_gid) == int(gid):
+            rename_tab(sheets, dest_spreadsheet_id, gid, tab_title)
 
-        # 값 쓰기
         write_project_values(sheets, dest_spreadsheet_id, tab_title, props)
         time.sleep(0.8)
 
-        # ✅ 성공 후 update_info 저장
         update_info[page_id] = last_edited_time
 
         if created:
-            print(f"[CREATED_AND_SYNCED] year={year_key} page={page_id} gid={gid} title={tab_title}")
+            print(f"[CREATED_AND_SYNCED] year={year_key} name={project_name} page={page_id} gid={gid}")
         else:
-            print(f"[UPDATE] year={year_key} page={page_id} gid={gid} title={tab_title}")
+            print(f"[UPDATE] year={year_key} name={project_name} page={page_id} gid={gid}")
 
     save_json(SHEETS_INFO, sheets_info)
     save_json(PROJECT_UPDATE_INFO, update_info)
@@ -483,7 +447,7 @@ default_args = {
 with DAG(
     dag_id='syncNotionSheets',
     default_args=default_args,
-    schedule='10 9,14 * * 1-5',  # 매년 1월 13일
+    schedule='10 9,14 * * 1-5',
     catchup=False,
     max_active_runs=1,
     tags=['notion', 'gsheet', 'automation']
@@ -500,4 +464,3 @@ with DAG(
     )
 
     ensure_year_sheets >> sync_projects
-    
